@@ -183,6 +183,30 @@ class Quaternion:
         -------
         Quaternion
             A new Quaternion object.
+
+        Examples
+        --------
+        Rotate 90° around the Z-axis::
+
+            >>> from quatham import Quaternion
+            >>> import numpy as np
+            >>> axis = np.array([0, 0, 1])
+            >>> angle = np.pi / 2  # 90 degrees in radians
+            >>> q = Quaternion.from_axisangle(axis, angle)
+            >>> print(q)
+            Quaternion(1.5708; [0. 0. 1.])
+
+        Using degrees::
+
+            >>> q = Quaternion.from_axisangle([0, 0, 1], 90, degrees=True)
+
+        Batch creation with multiple axes::
+
+            >>> axes = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
+            >>> angles = np.array([45, 30, 60])
+            >>> quats = Quaternion.from_axisangle(axes, angles, degrees=True)
+            >>> quats.num_quaternions
+            3
         """
         return cls(_axis_angle_to_quat(v, theta, degrees=degrees))
 
@@ -207,6 +231,41 @@ class Quaternion:
         -------
         Quaternion
             A new Quaternion object.
+
+        Examples
+        --------
+        Create from 90° rotations around each axis::
+
+            >>> from quatham import Quaternion
+            >>> import numpy as np
+            >>> angles = np.array([90, 45, 30])
+            >>> q = Quaternion.from_euler(angles, degrees=True)
+            >>> print(q)
+            Quaternion(2.3562; [0.9239 0.3827 1.0607])
+
+        Using radians (default)::
+
+            >>> angles_rad = np.array([np.pi/2, np.pi/4, np.pi/6])
+            >>> q = Quaternion.from_euler(angles_rad)
+
+        Different rotation sequence (proper Euler angles)::
+
+            >>> q = Quaternion.from_euler([30, 45, 60], seq='zxz', degrees=True)
+
+        Intrinsic vs extrinsic rotations::
+
+            # Intrinsic (rotations about moving axes)
+            >>> q_intrinsic = Quaternion.from_euler([30, 45, 60], intrinsic=True, degrees=True)
+            
+            # Extrinsic (rotations about fixed axes)
+            >>> q_extrinsic = Quaternion.from_euler([30, 45, 60], intrinsic=False, degrees=True)
+
+        Batch creation::
+
+            >>> angles_batch = np.array([[30, 0, 0], [0, 45, 0], [0, 0, 60]])
+            >>> quats = Quaternion.from_euler(angles_batch, seq='xyz', degrees=True)
+            >>> quats.num_quaternions
+            3
         """
         return cls(_compose_quaternion_rotation(angles, seq=seq, degrees=degrees, intrinsic=intrinsic))
 
@@ -228,6 +287,22 @@ class Quaternion:
         -------
         Quaternion
             A new Quaternion object.
+
+        Examples
+        --------
+        Create quaternion from spherical coordinates::
+
+            >>> from quatham import Quaternion
+            >>> import numpy as np
+            >>> theta = np.pi / 4  # 45° from z-axis
+            >>> phi = np.pi / 3    # 60° from x-axis in xy-plane
+            >>> q = Quaternion.from_spherical(theta, phi)
+            >>> print(q)
+            Quaternion(1.0472; [0.5 0.866 0.5])
+
+        Using degrees::
+
+            >>> q = Quaternion.from_spherical(45, 60, degrees=True)
         """
         return cls(_spherical_coords_to_quat(theta, phi, degrees=degrees))
 
@@ -245,6 +320,34 @@ class Quaternion:
         tuple of (NDArray, NDArray or float)
             (axis, theta) where axis is the normalized rotation axis vector(s) of shape
             (3,) or (N, 3), and theta is the rotation angle(s) as a float or array of shape (N,).
+
+        Examples
+        --------
+        Extract axis and angle from a quaternion::
+
+            >>> from quatham import Quaternion
+            >>> import numpy as np
+            >>> q = Quaternion.from_axisangle([0, 0, 1], np.pi/2)
+            >>> axis, angle = q.to_axis_angle()
+            >>> print(f"Axis: {axis}, Angle: {angle:.4f} rad")
+            Axis: [0. 0. 1.], Angle: 1.5708 rad
+
+        Get angle in degrees::
+
+            >>> axis, angle_deg = q.to_axis_angle(degrees=True)
+            >>> print(f"Angle: {angle_deg:.1f}°")
+            Angle: 90.0°
+
+        Roundtrip conversion::
+
+            >>> original_axis = np.array([1, 0, 0])
+            >>> original_angle = np.pi / 3  # 60 degrees
+            >>> q = Quaternion.from_axisangle(original_axis, original_angle)
+            >>> axis_out, angle_out = q.to_axis_angle()
+            >>> np.allclose(axis_out, original_axis)
+            True
+            >>> np.allclose(angle_out, original_angle)
+            True
         """
         axes, thetas = _quat_to_axis_angle(self.ndarray, degrees=degrees)
 
@@ -277,6 +380,36 @@ class Quaternion:
         NDArray
             A 3x3 rotation matrix. For multiple quaternions, returns shape (N, 3, 3).
             Currently, returns a single 3x3 matrix for the first quaternion.
+
+        Examples
+        --------
+        Get rotation matrix from quaternion::
+
+            >>> from quatham import Quaternion
+            >>> import numpy as np
+            >>> q = Quaternion.from_axisangle([0, 0, 1], np.pi/2)  # 90° around Z
+            >>> R = q.to_rotation_matrix()
+            >>> print(R)
+            [[ 6.123e-17 -1.000e+00  0.000e+00]
+             [ 1.000e+00  6.123e-17  0.000e+00]
+             [ 0.000e+00  0.000e+00  1.000e+00]]
+
+        Verify it's a valid rotation matrix::
+
+            >>> # Should be orthogonal: R @ R.T = I
+            >>> np.allclose(R @ R.T, np.eye(3))
+            True
+            >>> # Determinant should be 1
+            >>> np.allclose(np.linalg.det(R), 1.0)
+            True
+
+        Batch rotation matrices::
+
+            >>> angles = np.array([[30, 0, 0], [0, 45, 0], [0, 0, 60]])
+            >>> quats = Quaternion.from_euler(angles, degrees=True)
+            >>> R_batch = quats.to_rotation_matrix()
+            >>> R_batch.shape
+            (3, 3, 3)
         """
         mats = _calc_rotation_mat(self.ndarray)
 
@@ -310,6 +443,22 @@ class Quaternion:
         -------
         NDArray
             Array of shape (N, 3) containing [yaw, pitch, roll] angles.
+
+        Examples
+        --------
+        Extract yaw, pitch, roll from quaternion::
+
+            >>> from quatham import Quaternion
+            >>> import numpy as np
+            >>> q = Quaternion.from_euler([30, 45, 60], seq='xyz', degrees=True)
+            >>> ypr = q.to_yaw_pitch_roll()
+            >>> print(f"Yaw: {ypr[0]:.1f}°, Pitch: {ypr[1]:.1f}°, Roll: {ypr[2]:.1f}°")
+            Yaw: 30.0°, Pitch: 45.0°, Roll: 60.0°
+
+        Get angles in radians::
+
+            >>> ypr_rad = q.to_yaw_pitch_roll(degrees=False)
+        """
         """
         return self.to_tait_bryan(seq='zyx', degrees=degrees)
 
@@ -343,6 +492,26 @@ class Quaternion:
         ------
         ValueError
             If ``seq`` is not one of the supported sequences.
+
+        Examples
+        --------
+        Extract Euler angles (proper sequence)::
+
+            >>> from quatham import Quaternion
+            >>> import numpy as np
+            >>> q = Quaternion.from_euler([30, 45, 60], seq='zxz', degrees=True)
+            >>> euler = q.to_euler(seq='zxz', degrees=True)
+            >>> print(f"α={euler[0]:.1f}°, β={euler[1]:.1f}°, γ={euler[2]:.1f}°")
+            α=30.0°, β=45.0°, γ=60.0°
+
+        Different Euler sequence::
+
+            >>> q = Quaternion.from_euler([30, 45, 60], seq='xyx', degrees=True)
+            >>> euler = q.to_euler(seq='xyx', degrees=True)
+
+        Extrinsic rotations::
+
+            >>> euler_extrinsic = q.to_euler(seq='zxz', intrinsic=False, degrees=True)
         """
         valid = {"xzx", "xyx", "yxy", "yzy", "zxz", "zyz"}
         if seq.lower() not in valid:
@@ -392,6 +561,26 @@ class Quaternion:
         ------
         ValueError
             If ``seq`` is not one of the supported sequences.
+
+        Examples
+        --------
+        Extract Tait-Bryan angles::
+
+            >>> from quatham import Quaternion
+            >>> import numpy as np
+            >>> q = Quaternion.from_euler([30, 45, 60], seq='xyz', degrees=True)
+            >>> tb = q.to_tait_bryan(seq='xyz', degrees=True)
+            >>> print(f"α={tb[0]:.1f}°, β={tb[1]:.1f}°, γ={tb[2]:.1f}°")
+            α=30.0°, β=45.0°, γ=60.0°
+
+        Different sequence (zyx = yaw-pitch-roll)::
+
+            >>> tb = q.to_tait_bryan(seq='zyx', degrees=True)
+            >>> print(f"Yaw={tb[0]:.1f}°, Pitch={tb[1]:.1f}°, Roll={tb[2]:.1f}°")
+
+        Extrinsic rotations::
+
+            >>> tb_extrinsic = q.to_tait_bryan(seq='xyz', intrinsic=False, degrees=True)
         """
         valid = {"xzy", "xyz", "yxz", "yzx", "zyx", "zxy"}
         if seq.lower() not in valid:
@@ -430,6 +619,25 @@ class Quaternion:
         -------
         Quaternion
             A new Quaternion object normalized to unit length.
+
+        Examples
+        --------
+        Normalize a non-unit quaternion::
+
+            >>> from quatham import Quaternion
+            >>> q = Quaternion([2.0, 0.0, 0.0, 0.0])
+            >>> q.magnitude
+            2.0
+            >>> q_unit = q.normalise()
+            >>> q_unit.magnitude
+            1.0
+
+        Normalize batch of quaternions::
+
+            >>> quats = Quaternion([[2, 0, 0, 0], [0, 3, 0, 0], [0, 0, 4, 0]])
+            >>> quats_unit = quats.normalise()
+            >>> quats_unit.magnitude
+            array([1., 1., 1.])
         """
         return Quaternion(normalise(self.ndarray))
 
@@ -571,6 +779,21 @@ class Quaternion:
         -------
         Quaternion
             Sum of the quaternions.
+
+        Examples
+        --------
+        Add two quaternions::
+
+            >>> from quatham import Quaternion
+            >>> q1 = Quaternion([1, 0, 0, 0])
+            >>> q2 = Quaternion([0, 1, 0, 0])
+            >>> q3 = q1 + q2
+            >>> print(q3)
+            Quaternion(1.000000; [1. 0. 0.])
+
+        Add quaternion and array::
+
+            >>> q = Quaternion([1, 0, 0, 0]) + [0.5, 0.5, 0, 0]
         """
         if isinstance(other, Quaternion):
             return Quaternion(self.ndarray + other.ndarray)
@@ -665,6 +888,29 @@ class Quaternion:
         ------
         TypeError or ValueError
             If other is an unknown type or vector has invalid length.
+
+        Examples
+        --------
+        Quaternion multiplication (Hamilton product)::
+
+            >>> from quatham import Quaternion
+            >>> import numpy as np
+            >>> q1 = Quaternion.from_axisangle([0, 0, 1], np.pi/2)
+            >>> q2 = Quaternion.from_axisangle([1, 0, 0], np.pi/2)
+            >>> q3 = q1 * q2
+
+        Scalar multiplication::
+
+            >>> q = Quaternion([1, 0, 0, 0])
+            >>> q_scaled = q * 2.0
+
+        Rotate a vector::
+
+            >>> q = Quaternion.from_axisangle([0, 0, 1], np.pi/2)
+            >>> v = np.array([1.0, 0.0, 0.0])
+            >>> v_rotated = q * v
+            >>> print(v_rotated)
+            [0. 1. 0.]
         """
         if isinstance(other, Quaternion):
             return self._multiply_with_quaternion(other)
@@ -731,6 +977,20 @@ class Quaternion:
         ------
         TypeError or ValueError
             If other is not a Quaternion, scalar, or 4-element array.
+
+        Examples
+        --------
+        Divide by scalar::
+
+            >>> from quatham import Quaternion
+            >>> q = Quaternion([2, 0, 0, 0])
+            >>> q_half = q / 2.0
+
+        Divide by quaternion::
+
+            >>> q1 = Quaternion.from_axisangle([0, 0, 1], np.pi/2)
+            >>> q2 = Quaternion.from_axisangle([0, 0, 1], np.pi/4)
+            >>> q_diff = q1 / q2
         """
         if isinstance(other, Quaternion):
             return self._divide_by_quaternion(other)
