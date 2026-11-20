@@ -10,11 +10,11 @@ rotation matrices, and quaternion multiplication with Numba acceleration.
 
 # Standard Library
 import math
-from math import acos, cos, sin
 
 # Imports
 import numpy as np
 from numba import njit
+from numba.typed import List
 from numpy.typing import NDArray
 
 # Local Sources
@@ -25,7 +25,7 @@ X_UNIT_AXIS = (1, 0, 0)
 Y_UNIT_AXIS = (0, 1, 0)
 Z_UNIT_AXIS = (0, 0, 1)
 
-__all__ = ['normalise', 'calc_spherical_coordinates', 'make_2d']
+__all__ = ['normalise', 'rotate_vectors_by_quaternion', 'calc_spherical_coordinates', 'make_2d']
 
 @njit(cache=True)
 def np_normalise_2d(row_array: NDArray) -> NDArray:
@@ -446,6 +446,122 @@ def _calc_tait_bryan_angles(qarr: NDArray, seq: str, intrinsic: bool = True) -> 
     return m
 
 
+@njit(cache=True)
+def rotate_vectors_by_quaternion(quat: NDArray, vectors: NDArray) -> NDArray:
+    """
+    Rotate vectors by quaternion(s).
+
+    Supports:
+    - Single quaternion (1, 4) × multiple vectors (N, 3) → (N, 3)
+    - Multiple quaternions (N, 4) × single vector (1, 3) → (N, 3)
+    - Multiple quaternions (N, 4) × multiple vectors (N, 3) → (N, 3)
+
+    Parameters
+    ----------
+    quat : NDArray (N, 4) or (1, 4)
+        Quaternion(s) [w, x, y, z]
+    vectors : NDArray (N, 3)
+        Vectors to rotate
+
+    Returns
+    -------
+    NDArray (N, 3)
+        Rotated vectors
+    """
+    n_quats = quat.shape[0]
+    n_vectors = vectors.shape[0]
+
+    # Determine if we're broadcasting
+    if n_quats == 1 and n_vectors > 1:
+        # Single quaternion, multiple vectors (original case)
+        w, x, y, z = quat[0, 0], quat[0, 1], quat[0, 2], quat[0, 3]
+
+        # Precompute rotation matrix elements
+        w2, x2, y2, z2 = w * w, x * x, y * y, z * z
+        wx, wy, wz = w * x, w * y, w * z
+        xy, xz, yz = x * y, x * z, y * z
+
+        r00 = w2 + x2 - y2 - z2
+        r01 = 2 * (xy - wz)
+        r02 = 2 * (xz + wy)
+        r10 = 2 * (xy + wz)
+        r11 = w2 - x2 + y2 - z2
+        r12 = 2 * (yz - wx)
+        r20 = 2 * (xz - wy)
+        r21 = 2 * (yz + wx)
+        r22 = w2 - x2 - y2 + z2
+
+        result = np.empty((n_vectors, 3), dtype=np.float64)
+        for i in range(n_vectors):
+            vx, vy, vz = vectors[i, 0], vectors[i, 1], vectors[i, 2]
+            result[i, 0] = r00 * vx + r01 * vy + r02 * vz
+            result[i, 1] = r10 * vx + r11 * vy + r12 * vz
+            result[i, 2] = r20 * vx + r21 * vy + r22 * vz
+
+        return result
+
+    elif n_quats > 1 and n_vectors == 1:
+        # Multiple quaternions, single vector (test case)
+        result = np.empty((n_quats, 3), dtype=np.float64)
+
+        for q in range(n_quats):
+            w, x, y, z = quat[q, 0], quat[q, 1], quat[q, 2], quat[q, 3]
+            vx, vy, vz = vectors[0, 0], vectors[0, 1], vectors[0, 2]
+
+            # Precompute rotation matrix elements
+            w2, x2, y2, z2 = w * w, x * x, y * y, z * z
+            wx, wy, wz = w * x, w * y, w * z
+            xy, xz, yz = x * y, x * z, y * z
+
+            r00 = w2 + x2 - y2 - z2
+            r01 = 2 * (xy - wz)
+            r02 = 2 * (xz + wy)
+            r10 = 2 * (xy + wz)
+            r11 = w2 - x2 + y2 - z2
+            r12 = 2 * (yz - wx)
+            r20 = 2 * (xz - wy)
+            r21 = 2 * (yz + wx)
+            r22 = w2 - x2 - y2 + z2
+
+            result[q, 0] = r00 * vx + r01 * vy + r02 * vz
+            result[q, 1] = r10 * vx + r11 * vy + r12 * vz
+            result[q, 2] = r20 * vx + r21 * vy + r22 * vz
+
+        return result
+
+    elif n_quats == n_vectors:
+        # Multiple quaternions, multiple vectors (one-to-one)
+        result = np.empty((n_quats, 3), dtype=np.float64)
+
+        for i in range(n_quats):
+            w, x, y, z = quat[i, 0], quat[i, 1], quat[i, 2], quat[i, 3]
+            vx, vy, vz = vectors[i, 0], vectors[i, 1], vectors[i, 2]
+
+            # Precompute rotation matrix elements
+            w2, x2, y2, z2 = w * w, x * x, y * y, z * z
+            wx, wy, wz = w * x, w * y, w * z
+            xy, xz, yz = x * y, x * z, y * z
+
+            r00 = w2 + x2 - y2 - z2
+            r01 = 2 * (xy - wz)
+            r02 = 2 * (xz + wy)
+            r10 = 2 * (xy + wz)
+            r11 = w2 - x2 + y2 - z2
+            r12 = 2 * (yz - wx)
+            r20 = 2 * (xz - wy)
+            r21 = 2 * (yz + wx)
+            r22 = w2 - x2 - y2 + z2
+
+            result[i, 0] = r00 * vx + r01 * vy + r02 * vz
+            result[i, 1] = r10 * vx + r11 * vy + r12 * vz
+            result[i, 2] = r20 * vx + r21 * vy + r22 * vz
+
+        return result
+
+    else:
+        raise ValueError(f"Shape mismatch: quat {quat.shape}, vectors {vectors.shape}")
+
+
 def _spherical_coords_to_quat(theta: float | NDArray, phi: float | NDArray, degrees: bool = False) -> NDArray:
     """
     Convert spherical coordinates to a quaternion.
@@ -747,7 +863,7 @@ def _quat_to_axis_angle(q: NDArray | list | tuple, degrees: bool = False) -> tup
 
 
 @njit
-def make_2d(arraylist: list[NDArray]) -> NDArray:
+def make_2d(arraylist: List[NDArray]) -> NDArray:
     """
     Stack a list of 1D arrays into a 2D array.
 
@@ -763,7 +879,8 @@ def make_2d(arraylist: list[NDArray]) -> NDArray:
     """
     n = len(arraylist)
     k = arraylist[0].shape[0]
-    a2d = np.zeros((n, k))
+    a2d = np.empty((n, k), dtype=arraylist[0].dtype)
     for i in range(n):
-        a2d[i] = arraylist[i]
+        for j in range(k):
+            a2d[i, j] = arraylist[i][j]
     return a2d

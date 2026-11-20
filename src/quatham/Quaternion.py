@@ -31,7 +31,7 @@ from .utilities import (
     _compose_quaternion_rotation,
     _quat_to_axis_angle,
     _spherical_coords_to_quat,
-    normalise, _quat_mult, _quat_div,
+    normalise, _quat_mult, _quat_div, rotate_vectors_by_quaternion,
 )
 
 
@@ -80,35 +80,39 @@ class Quaternion:
 
         rot_mat = q.get_rotation_matrix()
     """
+    __slots__ = ['ndarray', 'num_quaternions', '_scalar', '_vector', '_conjugate', '_w', '_x', '_y', '_z']
 
     def __init__(self, value: NDArray | list | tuple | None = None) -> None:
-
         if value is not None:
-            vect_array = np.asarray(value)
+            # FAST PATH: Already ndarray
+            if isinstance(value, np.ndarray):
+                vect_array = value
+            else:
+                # SLOW PATH: Convert from list/tuple
+                vect_array = np.asarray(value)
 
+            # Ensure 2D
             if vect_array.ndim == 1:
                 vect_array = vect_array[None, :]
-            if vect_array.shape[1] == 1:
+
+            # Handle column vectors: (4, 1) → (1, 4)
+            if vect_array.shape[1] == 1 and vect_array.shape[0] == 4:
                 vect_array = vect_array.T
 
             self.ndarray = vect_array
             self.num_quaternions = self.ndarray.shape[0]
-            self._scalar = self.ndarray[:, 0]
-            self._vector = self.ndarray[:, 1::] * 1.0
-            self.w = self.scalar
-            self.x = self.ndarray[:, 1]
-            self.y = self.ndarray[:, 2]
-            self.z = self.ndarray[:, 3]
-
         else:
             self.ndarray = None
             self.num_quaternions = None
-            self._scalar = None
-            self._vector = None
-            self.w = None
-            self.x = None
-            self.y = None
-            self.z = None
+
+        # Lazy initialisation
+        self._scalar = None
+        self._vector = None
+        self._conjugate = None
+        self._w = None
+        self._x = None
+        self._y = None
+        self._z = None
 
     @property
     def scalar(self) -> NDArray:
@@ -120,6 +124,8 @@ class Quaternion:
         NDArray
             The scalar (w) component of the quaternion(s).
         """
+        if self._scalar is None:
+            self._scalar = self.ndarray[:, 0]
         return self._scalar
 
     @property
@@ -133,7 +139,67 @@ class Quaternion:
             A numpy array of shape (N, 3) containing [x, y, z] components.
             NOT guaranteed to be a unit vector.
         """
+        if self._vector is None:
+            self._vector = self.ndarray[:, 1:]
         return self._vector
+
+    @property
+    def w(self) -> NDArray:
+        """
+        Returns the w component of the quaternion object.
+
+        Returns
+        -------
+        NDArray
+            A numpy array of shape (N, 1) containing the w component of the quaternion(s).
+
+        """
+        if self._w is None:
+            self._w = self.scalar
+        return self._w
+
+    @property
+    def x(self) -> NDArray:
+        """
+        Returns the x component of the quaternion object.
+
+        Returns
+        -------
+        NDArray
+            A numpy array of shape (N, 1) containing the x component of the quaternion(s).
+        """
+        if self._x is None:
+            self._x = self.ndarray[:, 1]
+        return self._x
+
+    @property
+    def y(self) -> NDArray:
+        """
+        Returns the y component of the quaternion object.
+
+        Returns
+        -------
+        NDArray
+            A numpy array of shape (N, 1) containing the y component of the quaternion(s).
+
+        """
+        if self._y is None:
+            self._y = self.ndarray[:, 2]
+        return self._y
+
+    @property
+    def z(self) -> NDArray:
+        """
+        Returns the z component of the quaternion object.
+
+        Returns
+        -------
+        NDArray
+            A numpy array of shape (N, 1) containing the z component of the quaternion(s).
+        """
+        if self._z is None:
+            self._z = self.ndarray[:, 3]
+        return self._z
 
     @property
     def conjugate(self) -> Self:
@@ -147,7 +213,9 @@ class Quaternion:
         Quaternion
             A new Quaternion object representing the conjugate.
         """
-        return Quaternion(self.ndarray * np.array([1, -1, -1, -1]))
+        if not hasattr(self, '_conjugate') or self._conjugate is None:
+            self._conjugate =Quaternion(self.ndarray * np.array([1, -1, -1, -1]))
+        return self._conjugate
 
     @property
     def magnitude(self) -> NDArray:
@@ -459,7 +527,6 @@ class Quaternion:
 
             >>> ypr_rad = q.to_yaw_pitch_roll(degrees=False)
         """
-        """
         return self.to_tait_bryan(seq='zyx', degrees=degrees)
 
 
@@ -607,9 +674,53 @@ class Quaternion:
         NDArray or float
             The norm of the vector (imaginary) part of each quaternion.
         """
+        # Access property to trigger lazy initialization
+        vec = self.vector
+
         if self.num_quaternions == 1:
-            return float(np.linalg.norm(self._vector[0]))
-        return np.linalg.norm(self._vector, axis=1)
+            return float(np.linalg.norm(vec[0]))
+        return np.linalg.norm(vec, axis=1)
+
+    def rotate_vectors(self, vectors: NDArray) -> NDArray:
+        """
+        Rotate vectors by this quaternion.
+
+        Supports:
+        - Single quaternion (1, 4) × single vector (3,) → (3,)
+        - Single quaternion (1, 4) × multiple vectors (N, 3) → (N, 3)
+        - Multiple quaternions (N, 4) × single vector (3,) → (N, 3)
+        - Multiple quaternions (N, 4) × multiple vectors (N, 3) → (N, 3)
+
+        Parameters
+        ----------
+        vectors : NDArray
+            Vectors to rotate, shape (3,) or (N, 3)
+
+        Returns
+        -------
+    NDArray
+        Rotated vectors, shape depends on input:
+        - (3,) if single quaternion and single vector
+        - (N, 3) otherwise
+        """
+        # Handle 1D vector input
+        if vectors.ndim == 1:
+            vectors_2d = vectors[None, :]  # (1, 3)
+        else:
+            vectors_2d = vectors
+
+        # Handle multiple quaternions rotating same vector(s)
+        if self.num_quaternions > 1 and vectors_2d.shape[0] == 1:
+            # Broadcast vector to match quaternion count
+            vectors_2d = np.broadcast_to(vectors_2d, (self.num_quaternions, 3))
+
+        result = rotate_vectors_by_quaternion(self.ndarray, vectors_2d)
+
+        # Return 1D if both inputs were single
+        if vectors.ndim == 1 and self.num_quaternions == 1:
+            return result[0]
+
+        return result
 
     def normalise(self) -> Self:
         """
@@ -648,7 +759,7 @@ class Quaternion:
         Returns
         -------
         Quaternion
-            A new Quaternion object normalized to unit length.
+            A new Quaternion object normalised to unit length.
         """
         return self.normalise()
 
@@ -694,23 +805,6 @@ class Quaternion:
             Result of quaternion multiplication.
         """
         return Quaternion(_quat_mult(self.ndarray, q2.ndarray))
-
-    def _multiply_with_vector(self, vec: NDArray) -> NDArray:
-        """
-        Rotate a vector by this quaternion.
-
-        Parameters
-        ----------
-        vec : NDArray
-            A 3D vector to rotate, shape (3,) or (N, 3).
-
-        Returns
-        -------
-        NDArray
-            The rotated 3D vector(s), shape (3,) or (N, 3).
-        """
-        q2 = Quaternion(vec)
-        return (self * q2 * self.conjugate).ndarray[:, 1:]
 
     def __getitem__(self, item: int | slice) -> NDArray:
         """
@@ -922,15 +1016,11 @@ class Quaternion:
             arr = np.asarray(other)
             if arr.ndim == 0:
                 return Quaternion(self.ndarray * arr)
-            if arr.shape[-1] == 3 and (arr.ndim == 1 or arr.ndim == 2):
-                if arr.ndim == 1:
-                    new_other = np.zeros(4)
-                    new_other[1:] = arr
-                else:
-                    new_other = np.zeros((arr.shape[0], 4))
-                    new_other[:, 1:] = arr
-                return self._multiply_with_vector(new_other)
-            elif arr.shape[-1] == 4 and (arr.ndim == 1 or arr.ndim == 2):
+
+            if arr.shape[-1] == 3 and arr.ndim in (1, 2):
+                return self.rotate_vectors(arr)
+
+            elif arr.shape[-1] == 4 and arr.ndim in (1, 2):
                 return self._multiply_with_quaternion(Quaternion(arr))
             else:
                 raise ValueError(f"Input vector/array has invalid shape {arr.shape}")
