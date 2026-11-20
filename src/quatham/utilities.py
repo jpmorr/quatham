@@ -452,14 +452,15 @@ def rotate_vectors_by_quaternion(quat: NDArray, vectors: NDArray) -> NDArray:
     Rotate vectors by quaternion(s).
 
     Supports:
+    - Single quaternion (4,) × multiple vectors (N, 3) → (N, 3)
     - Single quaternion (1, 4) × multiple vectors (N, 3) → (N, 3)
     - Multiple quaternions (N, 4) × single vector (1, 3) → (N, 3)
     - Multiple quaternions (N, 4) × multiple vectors (N, 3) → (N, 3)
 
     Parameters
     ----------
-    quat : NDArray (N, 4) or (1, 4)
-        Quaternion(s) [w, x, y, z]
+    quat : NDArray (4,), (1, 4), or (N, 4)
+        Quaternion(s) [w, x, y, z]. 1D arrays are automatically reshaped to 2D.
     vectors : NDArray (N, 3)
         Vectors to rotate
 
@@ -468,6 +469,10 @@ def rotate_vectors_by_quaternion(quat: NDArray, vectors: NDArray) -> NDArray:
     NDArray (N, 3)
         Rotated vectors
     """
+    # Handle 1D quaternion - reshape to 2D (N, 4)
+    if quat.ndim == 1:
+        quat = quat[None, :]
+    
     n_quats = quat.shape[0]
     n_vectors = vectors.shape[0]
 
